@@ -24,7 +24,7 @@ from torch import nn
 from torch.utils.flop_counter import FlopCounterMode
 
 
-# A per-op FLOP map keyed on the stable string name (``aten::mm.default``-ish).
+### A per-op FLOP map keyed on the stable string name (``aten::mm.default``-ish).
 FlopCounts = dict[str, int]
 
 
