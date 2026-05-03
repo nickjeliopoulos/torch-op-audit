@@ -1,0 +1,23 @@
+model:
+  import: torchvision.models.resnet18
+  kwargs:
+    weights: null
+
+input:
+  shape: [8, 3, 224, 224]
+  dtype: float32
+
+benchmark:
+  fwd: true
+  bwd: true
+  warmup: 10
+  iters: 50
+
+# Override the default 3-class registry by setting `classes` to a mapping of
+# {class_name: [aten_op_name, ...]}. Leaving it null uses the defaults.
+classes: null
+
+output:
+  dir: ./results/resnet18
+  latex: true
+  csv: true
