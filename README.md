@@ -1,0 +1,126 @@
+# torch-op-audit
+
+Per-operator-class FLOP and latency benchmarking for PyTorch neural networks.
+
+Measure what fraction of your model's FLOPs and runtime comes from each type of operation: **tensor contractions** (matmuls, convolutions), **statistical normalizations** (layer norm, batch norm, softmax), and **elementwise** operations. Get a detailed breakdown with GPU-annotated LaTeX tables.
+
+## Why?
+
+Understanding where compute goes is the first step to optimization. This tool decomposes your model's operations into a small set of non-overlapping classes and reports their individual contribution to both arithmetic intensity and wall-clock time — separately for forward and backward passes.
+
+Inspired by Ivanov et al.'s ["Data Movement Is All You Need"](https://arxiv.org/abs/2007.00072).
+
+## Quick Start
+
+```bash
+# Install
+pip install -e .
+
+# Benchmark ResNet18
+python -m torch_arch_op_bench.cli --config configs/example.yaml --fwd --bwd
+
+# Or in Python
+from torch_arch_op_bench import benchmark
+import torch
+from torchvision.models import resnet18
+
+model = resnet18(weights=None).cuda()
+x = torch.randn(8, 3, 224, 224, device="cuda")
+
+report = benchmark(model, [x], fwd=True, bwd=True)
+print(report.fwd_summary)
+report.write("./results")
+```
+
+## Output
+
+```
+GPU: NVIDIA A100-SXM4-40GB
+=== forward (NVIDIA A100-SXM4-40GB) ===
+                      count         flops  latency_ms   %_flop  %_runtime
+class
+tensor_contraction    60500  6.264750e+11     1000.25     99.80      60.5
+stat_normalization       64  1.270784e+09       35.15      0.17      25.5
+elementwise           1001  1.968640e+07       10.20      0.03      13.0
+```
+
+Files written:
+- `NVIDIA_A100-SXM4-40GB__fwd_summary.csv` / `.tex`
+- `NVIDIA_A100-SXM4-40GB__bwd_summary.csv` / `.tex`
+- `..._fwd_detailed.csv` / `.tex` (per-op breakdown)
+- `..._bwd_detailed.csv` / `.tex`
+
+## Configuration
+
+Edit `configs/example.yaml`:
+
+```yaml
+model:
+  import: torchvision.models.resnet18
+  kwargs:
+    weights: null
+
+input:
+  shape: [8, 3, 224, 224]
+  dtype: float32
+
+benchmark:
+  fwd: true
+  bwd: true
+  warmup: 10
+  iters: 50
+
+output:
+  dir: ./results
+  latex: true
+  csv: true
+```
+
+Or override the default 3-class operator taxonomy with custom classes:
+
+```yaml
+classes:
+  my_class:
+    - mm
+    - addmm
+```
+
+## CLI
+
+```bash
+python -m torch_arch_op_bench.cli \
+  --config configs/example.yaml \
+  --fwd --bwd \
+  --out ./my_results
+
+# Sweep over multiple configs
+python scripts/run_sweep.py --config-dir configs/sweep/ --fwd --bwd
+```
+
+## Features
+
+- **Forward & backward** profiling with separate tables
+- **GPU-annotated** output (filenames and LaTeX captions)
+- **FlopCounterMode** for arithmetic intensity; **torch.profiler** for wall-clock time
+- **Non-overlapping classes** (tensor contraction, stat normalization, elementwise + catch-all) so coverage is exactly 100%
+- **Per-op detailed tables** for fine-grained analysis
+- **CUDA only** (production benchmarking on real hardware)
+- **Pinned shapes** via YAML config
+
+## Testing
+
+```bash
+pytest tests/test_smoke.py -v
+```
+
+Smoke tests require CUDA and verify correctness on tiny MLPs.
+
+## Notes
+
+- Backward FLOPs/latency are computed as `total(fwd+bwd) − fwd_only`.
+- Latency totals are summed across all benchmark iterations; divide by `iters` for per-iteration costs.
+- `mean` op is classified as `stat_normalization`; a richer taxonomy can be supplied via YAML.
+
+## License
+
+MIT
