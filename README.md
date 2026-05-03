@@ -2,11 +2,8 @@
 
 Per-operator-class FLOP and latency benchmarking for PyTorch neural networks.
 
-Measure what fraction of your model's FLOPs and runtime comes from each type of operation: **tensor contractions** (matmuls, convolutions), **statistical normalizations** (layer norm, batch norm, softmax), and **elementwise** operations. Get a detailed breakdown with GPU-annotated LaTeX tables.
-
-## Why?
-
-Understanding where compute goes is the first step to optimization. This tool decomposes your model's operations into a small set of non-overlapping classes and reports their individual contribution to both arithmetic intensity and wall-clock time — separately for forward and backward passes.
+Measure what fraction of your model's FLOPs and runtime comes from each type of operation: **tensor contractions** (matmuls, convolutions), **statistical normalizations** (layer norm, batch norm, softmax), and **elementwise** operations. 
+Get a detailed breakdown with GPU-annotated LaTeX tables.
 
 Inspired by Ivanov et al.'s ["Data Movement Is All You Need"](https://arxiv.org/abs/2007.00072).
 
@@ -96,31 +93,3 @@ python -m torch_arch_op_bench.cli \
 # Sweep over multiple configs
 python scripts/run_sweep.py --config-dir configs/sweep/ --fwd --bwd
 ```
-
-## Features
-
-- **Forward & backward** profiling with separate tables
-- **GPU-annotated** output (filenames and LaTeX captions)
-- **FlopCounterMode** for arithmetic intensity; **torch.profiler** for wall-clock time
-- **Non-overlapping classes** (tensor contraction, stat normalization, elementwise + catch-all) so coverage is exactly 100%
-- **Per-op detailed tables** for fine-grained analysis
-- **CUDA only** (production benchmarking on real hardware)
-- **Pinned shapes** via YAML config
-
-## Testing
-
-```bash
-pytest tests/test_smoke.py -v
-```
-
-Smoke tests require CUDA and verify correctness on tiny MLPs.
-
-## Notes
-
-- Backward FLOPs/latency are computed as `total(fwd+bwd) − fwd_only`.
-- Latency totals are summed across all benchmark iterations; divide by `iters` for per-iteration costs.
-- `mean` op is classified as `stat_normalization`; a richer taxonomy can be supplied via YAML.
-
-## License
-
-MIT
