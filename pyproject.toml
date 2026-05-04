@@ -18,7 +18,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7"]
+timm = ["timm>=0.9"]
+dev = ["pytest>=7", "timm>=0.9"]
 
 [project.scripts]
 torch-arch-op-bench = "torch_arch_op_bench.cli:main"

@@ -10,7 +10,7 @@ from torch import nn
 from .classes import build_op_to_class
 from .flops import count_fwd_bwd_flops, count_fwd_flops
 from .latency import measure_fwd_bwd_latency, measure_fwd_latency
-from .report import Report, aggregate, detailed, get_gpu_name
+from .report import Report, aggregate, detailed, missed_ops, get_gpu_name, input_shape_str
 
 
 __version__ = "0.0.1"
@@ -61,13 +61,18 @@ def benchmark(
 
     fwd_summary = aggregate(fwd_flops, fwd_lat, op_to_class) if fwd else None
     fwd_detailed_df = detailed(fwd_flops, fwd_lat, op_to_class) if fwd else None
+    fwd_missed_df = missed_ops(fwd_flops, fwd_lat, op_to_class) if fwd else None
     bwd_summary = aggregate(bwd_flops, bwd_lat, op_to_class) if bwd else None
     bwd_detailed_df = detailed(bwd_flops, bwd_lat, op_to_class) if bwd else None
+    bwd_missed_df = missed_ops(bwd_flops, bwd_lat, op_to_class) if bwd else None
 
     return Report(
         fwd_summary=fwd_summary,
         fwd_detailed=fwd_detailed_df,
+        fwd_missed=fwd_missed_df,
         bwd_summary=bwd_summary,
         bwd_detailed=bwd_detailed_df,
+        bwd_missed=bwd_missed_df,
         gpu_name=get_gpu_name(device),
+        input_shape=input_shape_str(example_inputs),
     )

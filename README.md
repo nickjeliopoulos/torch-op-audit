@@ -92,4 +92,24 @@ python -m torch_arch_op_bench.cli \
 
 # Sweep over multiple configs
 python scripts/run_sweep.py --config-dir configs/sweep/ --fwd --bwd
+
+# Run all included TIMM configs in one shot
+python scripts/run_sweep.py --config-dir configs/ --fwd --bwd
+```
+
+## Included configs
+
+| Config | Model | Notes |
+|---|---|---|
+| `configs/example.yaml` | ResNet-18 (torchvision) | conv-heavy baseline |
+| `configs/timm_vit_small.yaml` | ViT-Small/16 | attention + LayerNorm heavy |
+| `configs/timm_vit_base.yaml` | ViT-Base/16 | larger attention model |
+| `configs/timm_deit3_small.yaml` | DeiT-III Small/16 | ViT variant with class token |
+| `configs/timm_swin_small.yaml` | Swin-Small | windowed attention + patch merge |
+| `configs/timm_convnext_small.yaml` | ConvNeXt-Small | conv backbone with LayerNorm |
+
+TIMM models require `timm` to be installed:
+
+```bash
+pip install -e ".[timm]"
 ```

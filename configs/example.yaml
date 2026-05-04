@@ -8,8 +8,6 @@ input:
   dtype: float32
 
 benchmark:
-  fwd: true
-  bwd: true
   warmup: 10
   iters: 50
 

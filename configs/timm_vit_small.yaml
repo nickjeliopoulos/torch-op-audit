@@ -1,0 +1,20 @@
+model:
+  import: timm.create_model
+  kwargs:
+    model_name: vit_small_patch16_224
+    pretrained: false
+
+input:
+  shape: [8, 3, 224, 224]
+  dtype: float32
+
+benchmark:
+  warmup: 10
+  iters: 50
+
+classes: null
+
+output:
+  dir: ./results/vit_small
+  latex: true
+  csv: true

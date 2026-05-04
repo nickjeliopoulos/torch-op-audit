@@ -62,10 +62,10 @@ def main(argv: list[str] | None = None) -> int:
 
     cfg: DictConfig = OmegaConf.load(args.config)  # type: ignore[assignment]
 
-    fwd = args.fwd or bool(cfg.benchmark.get("fwd", False))
-    bwd = args.bwd or bool(cfg.benchmark.get("bwd", False))
+    fwd = args.fwd
+    bwd = args.bwd
     if not (fwd or bwd):
-        parser.error("specify --fwd and/or --bwd (or set them in the config)")
+        parser.error("specify at least one of --fwd / --bwd")
 
     model = _build_model(cfg)
     inputs = _build_inputs(cfg)
@@ -91,13 +91,24 @@ def main(argv: list[str] | None = None) -> int:
         csv=bool(cfg.output.get("csv", True)),
     )
 
-    print(f"GPU: {report.gpu_name}")
+    print(f"GPU: {report.gpu_name}  |  input: {report.input_shape}")
     if report.fwd_summary is not None:
-        print(f"=== forward ({report.gpu_name}) ===")
+        print(f"\n=== forward ({report.gpu_name}, {report.input_shape}) ===")
         print(report.fwd_summary.to_string())
     if report.bwd_summary is not None:
-        print(f"=== backward ({report.gpu_name}) ===")
+        print(f"\n=== backward ({report.gpu_name}, {report.input_shape}) ===")
         print(report.bwd_summary.to_string())
+
+    for tag, df in [("forward", report.fwd_missed), ("backward", report.bwd_missed)]:
+        if df is None or df.empty:
+            continue
+        print(f"\n=== {tag} — unregistered ops (post-mortem) ===")
+        print(
+            f"  {len(df)} op(s) fell through to the catch-all. "
+            "Add them to classes.py to improve classification:\n"
+        )
+        print(df.to_string(index=False))
+
     print(f"\nWrote tables to {out_dir}")
     return 0
 
