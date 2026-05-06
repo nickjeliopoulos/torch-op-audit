@@ -38,12 +38,19 @@ DEFAULT_CLASSES: dict[str, set[str]] = {
         # --- matrix exponential (sequence of GEMMs via Padé approximant) ---
         "linalg_matrix_exp",
         # --- attention ---
+        # SDPA wrapper + the inner-leaf ATen ops it dispatches to (the leaf op is
+        # what actually launches the cutlass / flash kernel; both are tagged here
+        # so attribution is correct regardless of which level torch surfaces).
         "_scaled_dot_product_efficient_attention",
         "_scaled_dot_product_flash_attention",
         "_scaled_dot_product_cudnn_attention",
         "_scaled_dot_product_efficient_attention_backward",
         "_scaled_dot_product_flash_attention_backward",
         "_scaled_dot_product_cudnn_attention_backward",
+        "_efficient_attention_forward",
+        "_efficient_attention_backward",
+        "_flash_attention_forward",
+        "_flash_attention_backward",
     },
     "stat_normalization": {
         # --- layer norm ---
@@ -67,6 +74,8 @@ DEFAULT_CLASSES: dict[str, set[str]] = {
         "native_group_norm_backward",
         # --- rms norm ---
         "rms_norm",
+        "_fused_rms_norm",
+        "_fused_rms_norm_backward",
         # --- softmax / log-softmax ---
         "softmax",                  # Python wrapper
         "_softmax",
@@ -84,7 +93,9 @@ DEFAULT_CLASSES: dict[str, set[str]] = {
         # arithmetic
         "add", "add_", "sub", "sub_", "mul", "mul_", "div", "div_",
         "rsub", "neg", "abs", "pow", "sqrt", "rsqrt", "exp", "log",
+        "log2", "log10", "log1p", "expm1",
         "reciprocal", "addcmul", "addcdiv",
+        "ceil", "floor", "round", "trunc", "sign",
         # activations
         "relu", "relu_", "gelu", "gelu_backward",
         "silu", "silu_backward", "sigmoid", "sigmoid_backward",
@@ -92,6 +103,7 @@ DEFAULT_CLASSES: dict[str, set[str]] = {
         "hardswish", "hardswish_backward", "hardsigmoid",
         "leaky_relu", "leaky_relu_backward", "elu", "elu_backward",
         "threshold_backward",
+        "softplus", "softplus_backward",
         # in-place activations seen in profiler (e.g. ReLU → clamp_min_)
         "clamp_min_", "clamp_max_",
         # comparisons / select
@@ -120,8 +132,25 @@ DEFAULT_CLASSES: dict[str, set[str]] = {
         "as_strided", "as_strided_",
         "roll",                     # Swin cyclic shift
         "index", "index_put", "index_put_",
+        "index_select", "gather", "scatter", "scatter_add",
         # reductions / accumulation often used for residual paths
         "sum",
+        "max", "min", "amax", "amin", "argmax", "argmin",
+        "cumsum", "cumprod",
+        # tensor creation
+        "arange", "linspace", "logspace", "full", "full_like", "zeros", "ones",
+        "rand", "randn", "rand_like", "randn_like",
+        # sorting / unique (no clean class — generally cheap data movement)
+        "sort", "argsort", "topk",
+        "unique", "unique_consecutive", "unique_dim",
+        # scalar extraction / sync points
+        "_local_scalar_dense",
+        # bitwise / logical
+        "bitwise_and", "bitwise_or", "bitwise_not", "bitwise_xor",
+        "logical_and", "logical_or", "logical_not", "logical_xor",
+        "all", "any",
+        # type / device
+        "type_as",
     },
 }
 

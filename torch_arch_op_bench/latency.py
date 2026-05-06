@@ -6,11 +6,22 @@ Two passes are run, mirroring :mod:`flops`:
 2. Full forward+backward profile → total kernel time per op; backward
    time per op is ``total - fwd`` (clamped to non-negative).
 
-Self-CUDA time is summed across all ``key_averages()`` entries and keyed
-on the bare ATen name (e.g. ``aten::mm``). The numbers reported are
-**total over all timed iterations** (not per-iter); fractional class
-breakdowns are unaffected, and the absolute scale is recoverable by
-dividing by ``iters``.
+ATen-only filtering
+-------------------
+``key_averages()`` returns events at every level of the call stack: ATen
+ops, the underlying CUDA kernels (cuBLAS GEMMs, cuDNN convs, cutlass
+attention kernels, ``vectorized_elementwise_kernel<...>`` templates,
+etc.), memory transfers (``Memcpy DtoD``), and profiler internals
+(``Command Buffer Full``).  PyTorch attributes the same ``self_cuda_time``
+to BOTH the leaf-ATen op AND the launched kernel, so summing all events
+double-counts every operation.
+
+We filter to ``aten::*`` events only.  This:
+  * eliminates the double-counting (each op's CUDA time appears once)
+  * keeps the post-mortem useful — only ATen ops missing from the registry
+    appear there, not opaque kernel signatures
+  * is safe in our context (PyTorch model forward/backward), where every
+    CUDA kernel is launched by an ATen op anyway
 """
 
 from __future__ import annotations
@@ -26,9 +37,20 @@ from torch.profiler import ProfilerActivity, profile
 LatencyCounts = dict[str, float]  # microseconds, per op key
 
 
+def _is_aten_event(key: str) -> bool:
+    """True for ATen-level profiler events (e.g. ``aten::mm``).
+
+    Filters out CUDA kernel names, memory transfers, and profiler internals.
+    """
+    return key.startswith("aten::") or key.startswith("aten.")
+
+
 def _sum_self_cuda_us(prof: profile) -> Counter[str]:
+    """Sum self-CUDA time per op, keeping only ATen-level events."""
     out: Counter[str] = Counter()
     for ev in prof.key_averages():
+        if not _is_aten_event(ev.key):
+            continue
         # self_cuda_time_total is in microseconds (renamed to self_device_time_total
         # in newer torch; fall back if needed).
         us = getattr(ev, "self_cuda_time_total", None)
