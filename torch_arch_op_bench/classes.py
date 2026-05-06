@@ -35,6 +35,8 @@ DEFAULT_CLASSES: dict[str, set[str]] = {
         "conv2d",                   # Python-level wrapper seen in profiler
         "cudnn_convolution",        # actual cuDNN kernel seen in profiler
         "cudnn_convolution_transpose",
+        # --- matrix exponential (sequence of GEMMs via Padé approximant) ---
+        "linalg_matrix_exp",
         # --- attention ---
         "_scaled_dot_product_efficient_attention",
         "_scaled_dot_product_flash_attention",

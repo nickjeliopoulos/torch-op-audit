@@ -38,9 +38,29 @@ def _resolve_dotted(path: str) -> Any:
     return getattr(importlib.import_module(module_name), attr)
 
 
+def _maybe_instantiate(value: Any) -> Any:
+    """Recursively instantiate any nested dict that has an ``import`` key.
+
+    Allows YAML configs to express sub-module kwargs, e.g.::
+
+        kwargs:
+          module:
+            import: torch.nn.Identity
+            kwargs: {}
+
+    Plain values pass through unchanged.
+    """
+    if isinstance(value, dict) and "import" in value:
+        factory = _resolve_dotted(value["import"])
+        sub_kwargs = {k: _maybe_instantiate(v) for k, v in (value.get("kwargs") or {}).items()}
+        return factory(**sub_kwargs)
+    return value
+
+
 def _build_model(cfg: DictConfig) -> torch.nn.Module:
     factory = _resolve_dotted(cfg.model["import"])
     kwargs = OmegaConf.to_container(cfg.model.get("kwargs", {}), resolve=True) or {}
+    kwargs = {k: _maybe_instantiate(v) for k, v in kwargs.items()}
     return factory(**kwargs)
 
 

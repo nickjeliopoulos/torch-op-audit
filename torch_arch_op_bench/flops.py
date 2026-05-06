@@ -78,6 +78,19 @@ def _max_pool2d_flops(
     return max(0, kh * kw - 1) * N * C * out_h * out_w
 
 
+def _matrix_exp_flops(input: torch.Tensor, *args, **kwargs) -> int:
+    """Generic Padé-13 estimate: ~13 × N³ FLOPs per [N, N] matrix, times batch.
+
+    Decomposes as roughly 7 matmuls + 1 linear-solve over an N×N matrix
+    (~6N³ for the matmuls, ~ ⅔N³ for the solve, plus scaling/squaring).
+    13·N³ is a generous round number that hides constant factors but is
+    accurate to within an order of magnitude for the realistic N range.
+    """
+    *batch, n, _ = input.shape
+    batch_count = math.prod(batch) if batch else 1
+    return 13 * (n ** 3) * batch_count
+
+
 def _adaptive_avg_pool2d_flops(
     input: torch.Tensor,
     output_size,
@@ -113,6 +126,8 @@ def _build_custom_formulas() -> dict:
         (ops.native_layer_norm,             "default", _bn_flops),
         # softmax — internal op; "softmax" wrapper NOT registered
         (ops._softmax,                      "default", _softmax_flops),
+        # matrix exponential (Padé approximant; sequence of GEMMs)
+        (ops.linalg_matrix_exp,             "default", _matrix_exp_flops),
         # pooling
         (ops.max_pool2d,                    "default", _max_pool2d_flops),
         (ops.max_pool2d_with_indices,       "default", _max_pool2d_flops),
