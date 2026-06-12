@@ -27,9 +27,9 @@ from torch import nn
 # Allow running straight from the repo without installing the package.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from torch_arch_op_bench import benchmark  # noqa: E402
-from torch_arch_op_bench.classes import build_op_to_class, classify  # noqa: E402
-from torch_arch_op_bench.trace import trace_module_phases  # noqa: E402
+from torch_arch_op_bench import benchmark
+from torch_arch_op_bench.classes import build_op_to_class, classify
+from torch_arch_op_bench.trace import trace_module_phases
 
 
 def test_classifier_normalization(device: str) -> None:
@@ -40,7 +40,7 @@ def test_classifier_normalization(device: str) -> None:
     assert classify("aten::native_layer_norm", table) == "stat_normalization"
     assert classify("aten::relu", table) == "elementwise"
     # Unknown op falls into the catch-all.
-    assert classify("aten::some_op_we_dont_know", table) == "elementwise"
+    assert classify("_unknown_", table) == "other"
 
 
 def test_module_phase_trace(device: str) -> None:
@@ -147,9 +147,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--device", default="cpu", help="cpu | cuda | xpu (default: cpu)")
     args = parser.parse_args(argv)
-
     device = args.device
-    print(f"torch {torch.__version__} | running smoke tests on device: {device}\n")
 
     failed = 0
     for fn in TESTS:
