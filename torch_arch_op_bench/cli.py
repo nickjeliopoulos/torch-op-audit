@@ -78,12 +78,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--fwd", action="store_true", help="run forward benchmark")
     parser.add_argument("--bwd", action="store_true", help="run backward benchmark")
     parser.add_argument("--out", type=Path, default=None, help="override output dir")
+    parser.add_argument(
+        "--trace",
+        action="store_true",
+        help="also capture a forward module-phase launch timeline (JSONL)",
+    )
     args = parser.parse_args(argv)
 
     cfg: DictConfig = OmegaConf.load(args.config)  # type: ignore[assignment]
 
+    device = cfg.model.device
     fwd = args.fwd
     bwd = args.bwd
+    
     if not (fwd or bwd):
         parser.error("specify at least one of --fwd / --bwd")
 
@@ -93,6 +100,13 @@ def main(argv: list[str] | None = None) -> int:
     classes_cfg = cfg.get("classes", None)
     classes = OmegaConf.to_container(classes_cfg, resolve=True) if classes_cfg else None
 
+    trace_cfg = cfg.get("trace", None) or {}
+    trace_enabled = args.trace or bool(trace_cfg.get("enabled", False))
+    include_types_cfg = trace_cfg.get("include_types", None)
+    trace_include_types = (
+        OmegaConf.to_container(include_types_cfg, resolve=True) if include_types_cfg else None
+    )
+
     report = benchmark(
         model,
         inputs,
@@ -101,7 +115,11 @@ def main(argv: list[str] | None = None) -> int:
         warmup=int(cfg.benchmark.get("warmup", 10)),
         iters=int(cfg.benchmark.get("iters", 50)),
         classes=classes,  # type: ignore[arg-type]
-        device="cuda",
+        device=device,
+        trace=trace_enabled,
+        trace_iters=int(trace_cfg.get("iters", 1)),
+        trace_include_types=trace_include_types,  # type: ignore[arg-type]
+        trace_max_depth=trace_cfg.get("max_depth", None),
     )
 
     out_dir = args.out or Path(cfg.output.get("dir", "./results"))
@@ -128,6 +146,9 @@ def main(argv: list[str] | None = None) -> int:
             "Add them to classes.py to improve classification:\n"
         )
         print(df.to_string(index=False))
+
+    if report.phase_events is not None:
+        print(f"\nCaptured {len(report.phase_events)} module-phase events -> {out_dir}/*__phase_trace.jsonl")
 
     print(f"\nWrote tables to {out_dir}")
     return 0

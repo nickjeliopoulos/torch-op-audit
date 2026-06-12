@@ -37,6 +37,22 @@ from torch.profiler import ProfilerActivity, profile
 LatencyCounts = dict[str, float]  # microseconds, per op key
 
 
+def _sync(device: torch.device) -> None:
+    """Block until queued work on ``device`` finishes (no-op on cpu)."""
+    if device.type != "cpu":
+        getattr(torch, device.type).synchronize()
+
+
+def _activities(device: torch.device) -> list:
+    """Profiler activities for ``device``: CPU plus the matching accelerator."""
+    activities = [ProfilerActivity.CPU]
+    if device.type == "cuda":
+        activities.append(ProfilerActivity.CUDA)
+    elif device.type == "xpu" and hasattr(ProfilerActivity, "XPU"):
+        activities.append(ProfilerActivity.XPU)
+    return activities
+
+
 def _is_aten_event(key: str) -> bool:
     """True for ATen-level profiler events (e.g. ``aten::mm``).
 
@@ -51,9 +67,11 @@ def _sum_self_cuda_us(prof: profile) -> Counter[str]:
     for ev in prof.key_averages():
         if not _is_aten_event(ev.key):
             continue
-        # self_cuda_time_total is in microseconds (renamed to self_device_time_total
-        # in newer torch; fall back if needed).
+        # self_cuda_time_total is in microseconds (xpu / newer torch expose
+        # self_xpu_time_total / self_device_time_total instead; fall back).
         us = getattr(ev, "self_cuda_time_total", None)
+        if us is None:
+            us = getattr(ev, "self_xpu_time_total", None)
         if us is None:
             us = getattr(ev, "self_device_time_total", 0.0)
         if us:
@@ -61,7 +79,7 @@ def _sum_self_cuda_us(prof: profile) -> Counter[str]:
     return out
 
 
-def _warmup_and_sync(model, inputs, *, iters: int, backward: bool) -> None:
+def _warmup_and_sync(model, inputs, *, iters: int, backward: bool, device) -> None:
     for _ in range(iters):
         if backward:
             out = model(*inputs)
@@ -75,7 +93,7 @@ def _warmup_and_sync(model, inputs, *, iters: int, backward: bool) -> None:
         else:
             with torch.no_grad():
                 model(*inputs)
-    torch.cuda.synchronize()
+    _sync(device)
 
 
 def measure_fwd_latency(
@@ -84,18 +102,20 @@ def measure_fwd_latency(
     *,
     warmup: int = 10,
     iters: int = 50,
+    device: str | torch.device = "cuda",
 ) -> LatencyCounts:
     """Forward-only kernel time per ATen op, summed over ``iters`` runs."""
     model.eval()
-    _warmup_and_sync(model, example_inputs, iters=warmup, backward=False)
+    device = torch.device(device)
+    _warmup_and_sync(model, example_inputs, iters=warmup, backward=False, device=device)
     with profile(
-        activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+        activities=_activities(device),
         record_shapes=False,
     ) as prof:
         for _ in range(iters):
             with torch.no_grad():
                 model(*example_inputs)
-        torch.cuda.synchronize()
+        _sync(device)
     return dict(_sum_self_cuda_us(prof))
 
 
@@ -105,13 +125,15 @@ def measure_fwd_bwd_latency(
     *,
     warmup: int = 10,
     iters: int = 50,
+    device: str | torch.device = "cuda",
 ) -> tuple[LatencyCounts, LatencyCounts]:
     """Return ``(fwd_us, bwd_us)`` per-op CUDA self-time dicts.
 
     Forward is measured under ``no_grad``; backward time per op is
     ``profile(fwd+bwd) - profile(fwd_only)``, clamped at zero.
     """
-    fwd_only = measure_fwd_latency(model, example_inputs, warmup=warmup, iters=iters)
+    device = torch.device(device)
+    fwd_only = measure_fwd_latency(model, example_inputs, warmup=warmup, iters=iters, device=device)
 
     model.train()
     grad_inputs: list[torch.Tensor] = []
@@ -121,9 +143,9 @@ def measure_fwd_bwd_latency(
         else:
             grad_inputs.append(x)
 
-    _warmup_and_sync(model, grad_inputs, iters=warmup, backward=True)
+    _warmup_and_sync(model, grad_inputs, iters=warmup, backward=True, device=device)
     with profile(
-        activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+        activities=_activities(device),
         record_shapes=False,
     ) as prof:
         for _ in range(iters):
@@ -135,7 +157,7 @@ def measure_fwd_bwd_latency(
             for x in grad_inputs:
                 if isinstance(x, torch.Tensor) and x.grad is not None:
                     x.grad = None
-        torch.cuda.synchronize()
+        _sync(device)
     total = _sum_self_cuda_us(prof)
 
     bwd: LatencyCounts = {}

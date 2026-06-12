@@ -3,6 +3,7 @@ model:
   kwargs:
     model_name: vit_base_patch16_224
     pretrained: false
+  device: xpu:0
 
 input:
   shape: [8, 3, 224, 224]

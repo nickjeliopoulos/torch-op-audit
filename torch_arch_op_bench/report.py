@@ -1,12 +1,11 @@
 """Aggregate per-op FLOP and latency dicts into per-class pandas tables."""
-
 from __future__ import annotations
-
+import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping
-
+from typing import Any, Mapping
 import pandas as pd
+import torch
 
 from .classes import CATCH_ALL_CLASS, classify, is_explicitly_registered
 
@@ -120,7 +119,6 @@ def missed_ops(
 @dataclass
 class Report:
     """Container holding fwd / bwd summary + detailed DataFrames."""
-
     fwd_summary: pd.DataFrame | None
     fwd_detailed: pd.DataFrame | None
     bwd_summary: pd.DataFrame | None
@@ -129,6 +127,9 @@ class Report:
     bwd_missed: pd.DataFrame | None
     gpu_name: str = "unknown_gpu"
     input_shape: str = ""
+    # Optional module-phase launch trace (populated when benchmark(trace=True)).
+    phase_events: list[dict[str, Any]] | None = None
+    trace_meta: dict[str, Any] | None = None
 
     def write(self, out_dir: str | Path, *, latex: bool = True, csv: bool = True) -> None:
         out = Path(out_dir)
@@ -146,6 +147,12 @@ class Report:
                 (out / f"{stem}.tex").write_text(
                     _to_latex(df, caption=name, gpu_name=self.gpu_name, input_shape=self.input_shape)
                 )
+        if self.phase_events is not None or self.trace_meta is not None:
+            with (out / f"{prefix}__phase_trace.jsonl").open("w") as f:
+                if self.trace_meta is not None:
+                    f.write(json.dumps(self.trace_meta) + "\n")
+                for event in self.phase_events or []:
+                    f.write(json.dumps(event) + "\n")
 
     def _iter_named_frames(self):
         yield "fwd_summary", self.fwd_summary
@@ -184,7 +191,6 @@ def input_shape_str(example_inputs: "Sequence[torch.Tensor]") -> str:
     Multiple inputs are separated by ``__``:  ``8x3x224x224__64x512``.
     Non-tensor inputs are skipped.
     """
-    import torch
 
     parts = [
         "x".join(str(d) for d in x.shape)
@@ -195,17 +201,17 @@ def input_shape_str(example_inputs: "Sequence[torch.Tensor]") -> str:
 
 
 def get_gpu_name(device: str | "torch.device") -> str:
-    """Resolve the human-readable GPU name for a CUDA device string/object.
+    """Resolve the human-readable device name (CUDA, Intel XPU, or CPU).
 
-    Returns ``"cpu"`` for non-CUDA devices and ``"unknown_gpu"`` if CUDA
-    is selected but unavailable.
+    Returns the GPU model for ``cuda``/``xpu`` devices and the device type
+    (e.g. ``"cpu"``) otherwise.
     """
-    import torch
 
     dev = torch.device(device)
-    if dev.type != "cuda":
-        return dev.type
-    if not torch.cuda.is_available():
-        return "unknown_gpu"
-    idx = dev.index if dev.index is not None else torch.cuda.current_device()
-    return torch.cuda.get_device_name(idx)
+    if dev.type == "cuda" and torch.cuda.is_available():
+        idx = dev.index if dev.index is not None else torch.cuda.current_device()
+        return torch.cuda.get_device_name(idx)
+    if dev.type == "xpu" and getattr(torch, "xpu", None) is not None and torch.xpu.is_available():
+        idx = dev.index if dev.index is not None else torch.xpu.current_device()
+        return torch.xpu.get_device_name(idx)
+    return dev.type

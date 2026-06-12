@@ -4,14 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "torch-arch-op-bench"
-version = "0.0.1"
+version = "0.1"
 description = "Per-operator-class FLOP and latency benchmarking for PyTorch nn.Modules"
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "Nick John Eliopoulos" }]
 license = { text = "MIT" }
 dependencies = [
-    "torch>=2.4",
+    "torch>=2.10",
     "pandas>=2.0",
     "omegaconf>=2.3",
     "tabulate>=0.9",
@@ -19,7 +19,7 @@ dependencies = [
 
 [project.optional-dependencies]
 timm = ["timm>=0.9"]
-dev = ["pytest>=7", "timm>=0.9"]
+dev = ["timm>=0.9"]
 
 [project.scripts]
 torch-arch-op-bench = "torch_arch_op_bench.cli:main"
