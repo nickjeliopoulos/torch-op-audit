@@ -244,8 +244,9 @@ def _sync(device) -> None:
 
 def trace_module_phases(
     model: nn.Module,
-    example_inputs: Sequence[torch.Tensor],
+    example_inputs: Sequence[torch.Tensor] | None = None,
     *,
+    generate_fn=None,
     iters: int = 1,
     t0: float | None = None,
     sink=None,
@@ -254,37 +255,45 @@ def trace_module_phases(
     max_depth: int | None = None,
     sync: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Trace the forward-pass module-phase timeline.
+    """Trace the module-phase timeline.
 
-    Runs ``model.eval()`` forward under ``no_grad`` for ``iters`` iterations with
-    forward hooks on every named submodule, emitting one :class:`PhaseEvent` per
-    invocation through ``sink``.
+    Runs forward hooks on every named submodule for ``iters`` iterations.
 
     Parameters
     ----------
+    example_inputs:
+        Positional tensor inputs for ``model(*example_inputs)``. Optional when
+        ``generate_fn`` is provided; used only for ``input_shape`` in the meta record.
+    generate_fn:
+        Zero-arg callable that drives one full inference pass (e.g. one
+        ``model.generate(...)`` call). When given, the driver calls ``generate_fn()``
+        instead of ``model(*example_inputs)``. ``example_inputs`` is not required.
     iters:
-        Number of forward passes to trace, sharing one ``t0`` so the timeline
-        spans all iterations (useful for seeing steady-state repetition).
+        Number of passes to trace, sharing one ``t0`` so the timeline spans all
+        iterations (useful for seeing the repeating phase structure of generate loops).
     t0:
-        Reference time (``perf_counter`` seconds) all ``t_enter`` values are
-        relative to. Defaults to "now" at the start of the run.
+        Reference time (``perf_counter`` seconds) all ``t_enter`` values are relative
+        to. Defaults to "now" at the start of the run.
     sink:
         Event sink. Defaults to a :class:`JsonlFdSink` on the fd named by
         ``TORCH_OP_AUDIT_EVENT_FD`` if set, else an in-memory :class:`BufferSink`.
     include_types / max_depth:
-        Optional filters: hook only modules whose class name is in
-        ``include_types``, and/or whose structural depth is ``<= max_depth``.
+        Optional filters on which submodules to hook.
 
     Returns
     -------
     ``(events, meta)``. ``events`` is the list of event records when a
     :class:`BufferSink` is used, or ``[]`` when streaming to a file descriptor.
     """
+    if generate_fn is None and example_inputs is None:
+        raise ValueError("provide either example_inputs or generate_fn")
+
     device = torch.device(device)
     model = model.to(device)
-    example_inputs = tuple(
-        x.to(device) if isinstance(x, torch.Tensor) else x for x in example_inputs
-    )
+    if example_inputs is not None:
+        example_inputs = tuple(
+            x.to(device) if isinstance(x, torch.Tensor) else x for x in example_inputs
+        )
 
     if sink is None:
         sink = _default_sink()
@@ -298,7 +307,7 @@ def trace_module_phases(
         "t0_abs": time.clock_gettime(time.CLOCK_MONOTONIC),
         "model": type(model).__name__,
         "gpu_name": get_gpu_name(device),
-        "input_shape": input_shape_str(example_inputs),
+        "input_shape": input_shape_str(example_inputs) if example_inputs is not None else "",
         "device": str(device),
         "iters": iters,
         "torch_version": torch.__version__,
@@ -319,7 +328,10 @@ def trace_module_phases(
     with torch.no_grad(), tracer:
         for k in range(iters):
             tracer.iter = k
-            model(*example_inputs)
+            if generate_fn is not None:
+                generate_fn()
+            else:
+                model(*example_inputs)
 
     sink.close()
     return list(getattr(sink, "events", [])), meta

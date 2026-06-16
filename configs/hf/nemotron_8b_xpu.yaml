@@ -1,0 +1,44 @@
+model:
+  hf_pretrained: "nvidia/Nemotron-Labs-Diffusion-VLM-8B"
+  trust_remote_code: true
+  dtype: bfloat16
+  # The Nemotron snapshot ships image_processing.py; inserting the snapshot dir
+  # into sys.path makes it importable as 'image_processing'.
+  sys_path_prepend: true
+  device: xpu:0
+
+# Preprocessor: how to turn a dataset row into model inputs.
+# type: custom_module  ->  import <fn> from a module already on sys.path (Nemotron path)
+# type: auto           ->  use AutoProcessor.from_pretrained (standard HF VLMs)
+processor:
+  type: custom_module
+  import: image_processing
+  fn: process_messages
+
+dataset:
+  id: merve/vqav2-small
+  split: validation
+  sample_index: 0              # which dataset row to use (mirrors --fixed-sample-index)
+
+# model.generate() kwargs mirroring vlm_nemo_multi.py fixed_work mode (default):
+#   threshold: null  -> forces NFE == steps (deterministic, no early-exit)
+#   shift_logits: false, temperature: 0.0 -> matches run_batch()
+# For natural mode behaviour, set threshold: 0.9 (confidence-based token acceptance).
+generate:
+  max_new_tokens: 512          # mirrors --max-new-tokens default
+  steps: 256                   # mirrors --steps default
+  block_length: 32             # mirrors --block-length default
+  threshold: null              # null = fixed_work mode; 0.9 = natural mode
+  shift_logits: false
+  temperature: 0.0
+
+benchmark:
+  warmup: 4                    # untimed warmup passes (mirrors --warmup default)
+
+trace:
+  iters: 1                     # number of generate() calls to record
+  max_depth: null              # null = all submodule depths; set e.g. 3 to limit nesting
+  include_types: null          # null = all module types; e.g. ["Attention", "MLP"]
+
+output:
+  dir: ./results/nemotron_8b
