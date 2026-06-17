@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 import pandas as pd
 import torch
 
@@ -72,6 +72,77 @@ def detailed(
         )
     df = pd.DataFrame.from_records(records)
     return df.sort_values(["class", "latency_ms"], ascending=[True, False]).reset_index(drop=True)
+
+
+def aggregate_audit_events(
+    events: Iterable[Any],
+    *,
+    kind: str | None = None,
+) -> pd.DataFrame:
+    """Aggregate completed audit events into the standard class summary table."""
+    rows: dict[str, dict[str, float]] = {}
+    for event in events:
+        if _event_value(event, "phase") != "stop":
+            continue
+        if kind is not None and _event_value(event, "kind") != kind:
+            continue
+        cls = str(_event_value(event, "class_name", CATCH_ALL_CLASS) or CATCH_ALL_CLASS)
+        row = rows.setdefault(
+            cls,
+            {"count": 0, "flops": 0.0, "latency_ms": 0.0},
+        )
+        row["count"] += 1
+        row["flops"] += float(_event_value(event, "flops", 0) or 0)
+        row["latency_ms"] += float(_event_value(event, "duration_s", 0.0) or 0.0) * 1_000.0
+
+    rows.setdefault(
+        CATCH_ALL_CLASS,
+        {"count": 0, "flops": 0.0, "latency_ms": 0.0},
+    )
+    df = pd.DataFrame.from_dict(rows, orient="index")
+    df.index.name = "class"
+    total_flops = df["flops"].sum()
+    total_latency = df["latency_ms"].sum()
+    df["%_flop"] = (df["flops"] / total_flops * 100.0) if total_flops > 0 else 0.0
+    df["%_runtime"] = (df["latency_ms"] / total_latency * 100.0) if total_latency > 0 else 0.0
+    df["count"] = df["count"].astype(int)
+    return df[_SUMMARY_COLUMNS].sort_values("%_runtime", ascending=False)
+
+
+def detailed_audit_events(
+    events: Iterable[Any],
+    *,
+    kind: str | None = None,
+) -> pd.DataFrame:
+    """Build a per-event audit table from completed stop events."""
+    records = []
+    for event in events:
+        if _event_value(event, "phase") != "stop":
+            continue
+        if kind is not None and _event_value(event, "kind") != kind:
+            continue
+        records.append(
+            {
+                "kind": _event_value(event, "kind"),
+                "name": _event_value(event, "name"),
+                "class": _event_value(event, "class_name", CATCH_ALL_CLASS),
+                "flops": int(_event_value(event, "flops", 0) or 0),
+                "latency_ms": float(_event_value(event, "duration_s", 0.0) or 0.0) * 1_000.0,
+                "error": _event_value(event, "error"),
+            }
+        )
+    if not records:
+        return pd.DataFrame(columns=["kind", "name", "class", "flops", "latency_ms", "error"])
+    return pd.DataFrame.from_records(records).sort_values(
+        ["kind", "class", "latency_ms"],
+        ascending=[True, True, False],
+    ).reset_index(drop=True)
+
+
+def _event_value(event: Any, key: str, default: Any = None) -> Any:
+    if isinstance(event, Mapping):
+        return event.get(key, default)
+    return getattr(event, key, default)
 
 
 _MISSED_COLUMNS = ["op", "normalized_name", "flops", "latency_ms", "%_of_total_latency"]

@@ -7,15 +7,37 @@ from typing import Mapping, Sequence
 import torch
 from torch import nn
 
+from .audit import AuditConfig, AuditEvent, attach_hooks, capture_events
 from .classes import build_op_to_class
 from .flops import count_fwd_bwd_flops, count_fwd_flops
 from .latency import measure_fwd_bwd_latency, measure_fwd_latency
-from .report import Report, aggregate, detailed, missed_ops, get_gpu_name, input_shape_str
+from .report import (
+    Report,
+    aggregate,
+    aggregate_audit_events,
+    detailed,
+    detailed_audit_events,
+    missed_ops,
+    get_gpu_name,
+    input_shape_str,
+)
 from .trace import PhaseEvent, trace_module_phases, write_trace_jsonl
 
 
 __version__ = "0.1"
-__all__ = ["benchmark", "Report", "PhaseEvent", "trace_module_phases", "write_trace_jsonl"]
+__all__ = [
+    "AuditConfig",
+    "AuditEvent",
+    "Report",
+    "PhaseEvent",
+    "aggregate_audit_events",
+    "attach_hooks",
+    "benchmark",
+    "capture_events",
+    "detailed_audit_events",
+    "trace_module_phases",
+    "write_trace_jsonl",
+]
 
 
 def benchmark(

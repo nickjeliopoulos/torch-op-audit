@@ -7,7 +7,7 @@ Example
 -------
 ::
 
-    python -m torch_arch_op_bench.cli --config configs/example.yaml --fwd --bwd
+    python -m torch_arch_op_bench.cli --config configs/timm/timm_vit_small.yaml --fwd --bwd
 """
 
 from __future__ import annotations

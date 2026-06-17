@@ -38,6 +38,8 @@ from torch import nn
 from torch.utils._python_dispatch import TorchDispatchMode
 from torch.utils.flop_counter import FlopCounterMode
 
+from .classes import _normalize_op_name
+
 
 FlopCounts = dict[str, int]
 
@@ -146,6 +148,134 @@ def _build_custom_formulas() -> dict:
 
 # Eagerly built at import time so the attribute lookups run once.
 _CUSTOM_FORMULAS: dict = _build_custom_formulas()
+
+
+def estimate_flops(func, args=(), kwargs=None, output=None) -> int | None:
+    """Best-effort FLOP estimate for one ATen operator invocation.
+
+    This is intentionally per-event and lightweight for live audit hooks. It
+    covers common tensor contractions plus the custom formulas above. Unknown
+    ops return ``None`` so callers can distinguish "not estimated" from zero.
+    """
+    kwargs = kwargs or {}
+
+    custom = _CUSTOM_FORMULAS.get(func)
+    if custom is not None:
+        try:
+            return int(custom(*args, **kwargs))
+        except Exception:
+            return None
+
+    op_name = _normalize_op_name(str(func))
+    try:
+        if op_name == "mm":
+            return _mm_flops(*args, output=output, **kwargs)
+        if op_name == "addmm":
+            return _addmm_flops(*args, output=output, **kwargs)
+        if op_name == "bmm":
+            return _bmm_flops(*args, output=output, **kwargs)
+        if op_name == "baddbmm":
+            flops = _bmm_flops(*args, output=output, **kwargs)
+            return None if flops is None else flops + (_numel(output) or 0)
+        if op_name == "matmul":
+            return _matmul_flops(*args, output=output, **kwargs)
+        if op_name == "linear":
+            return _linear_flops(*args, output=output, **kwargs)
+        if op_name in {"convolution", "_convolution", "conv2d", "cudnn_convolution"}:
+            return _conv_flops(op_name, *args, output=output, **kwargs)
+    except Exception:
+        return None
+    return None
+
+
+def _tensor(value) -> torch.Tensor | None:
+    return value if isinstance(value, torch.Tensor) else None
+
+
+def _numel(value) -> int | None:
+    tensor = _tensor(value)
+    return int(tensor.numel()) if tensor is not None else None
+
+
+def _mm_flops(mat1, mat2, *args, output=None, **kwargs) -> int | None:
+    mat1 = _tensor(mat1)
+    mat2 = _tensor(mat2)
+    if mat1 is None or mat2 is None or mat1.dim() < 2 or mat2.dim() < 2:
+        return None
+    m = int(mat1.shape[-2])
+    k = int(mat1.shape[-1])
+    n = int(mat2.shape[-1])
+    return 2 * m * n * k
+
+
+def _addmm_flops(input, mat1, mat2, *args, output=None, **kwargs) -> int | None:
+    mm = _mm_flops(mat1, mat2, output=output)
+    if mm is None:
+        return None
+    out_numel = _numel(output) or _numel(input) or 0
+    return mm + out_numel
+
+
+def _bmm_flops(batch_or_mat1, mat1_or_mat2, mat2=None, *args, output=None, **kwargs) -> int | None:
+    # ``bmm`` args are (mat1, mat2); ``baddbmm`` args are (input, batch1, batch2).
+    if mat2 is None:
+        mat1 = _tensor(batch_or_mat1)
+        mat2_tensor = _tensor(mat1_or_mat2)
+    else:
+        mat1 = _tensor(mat1_or_mat2)
+        mat2_tensor = _tensor(mat2)
+    if mat1 is None or mat2_tensor is None or mat1.dim() < 3 or mat2_tensor.dim() < 3:
+        return None
+    b = int(mat1.shape[-3])
+    m = int(mat1.shape[-2])
+    k = int(mat1.shape[-1])
+    n = int(mat2_tensor.shape[-1])
+    return 2 * b * m * n * k
+
+
+def _matmul_flops(mat1, mat2, *args, output=None, **kwargs) -> int | None:
+    mat1 = _tensor(mat1)
+    mat2 = _tensor(mat2)
+    out = _tensor(output)
+    if mat1 is None or mat2 is None or out is None:
+        return None
+    if mat1.dim() == 1 and mat2.dim() == 1:
+        return 2 * int(mat1.shape[0])
+    k = int(mat1.shape[-1]) if mat1.dim() > 1 else int(mat1.shape[0])
+    return 2 * int(out.numel()) * k
+
+
+def _linear_flops(input, weight, bias=None, *args, output=None, **kwargs) -> int | None:
+    input = _tensor(input)
+    weight = _tensor(weight)
+    if input is None or weight is None or input.dim() < 1 or weight.dim() < 2:
+        return None
+    in_features = int(weight.shape[-1])
+    out_features = int(weight.shape[0])
+    batch = int(input.numel()) // max(in_features, 1)
+    flops = 2 * batch * in_features * out_features
+    if bias is not None:
+        flops += batch * out_features
+    return flops
+
+
+def _conv_flops(op_name, input, weight, *args, output=None, **kwargs) -> int | None:
+    input = _tensor(input)
+    weight = _tensor(weight)
+    out = _tensor(output)
+    if input is None or weight is None or out is None or input.dim() < 3 or weight.dim() < 3:
+        return None
+
+    groups = kwargs.get("groups")
+    if groups is None:
+        if op_name == "conv2d" and len(args) >= 5:
+            groups = args[4]
+        elif len(args) >= 7:
+            groups = args[6]
+    groups = int(groups or 1)
+
+    kernel_ops = int(weight.shape[1]) * math.prod(int(v) for v in weight.shape[2:])
+    return 2 * int(out.numel()) * kernel_ops
 
 
 # ---------------------------------------------------------------------------

@@ -108,14 +108,19 @@ def measure_fwd_latency(
     model.eval()
     device = torch.device(device)
     _warmup_and_sync(model, example_inputs, iters=warmup, backward=False, device=device)
-    with profile(
-        activities=_activities(device),
-        record_shapes=False,
-    ) as prof:
-        for _ in range(iters):
-            with torch.no_grad():
-                model(*example_inputs)
-        _sync(device)
+    try:
+        with profile(
+            activities=_activities(device),
+            record_shapes=False,
+        ) as prof:
+            for _ in range(iters):
+                with torch.no_grad():
+                    model(*example_inputs)
+            _sync(device)
+    except RuntimeError as exc:
+        if not _is_profiler_startup_error(exc):
+            raise
+        return {}
     return dict(_sum_self_cuda_us(prof))
 
 
@@ -144,20 +149,25 @@ def measure_fwd_bwd_latency(
             grad_inputs.append(x)
 
     _warmup_and_sync(model, grad_inputs, iters=warmup, backward=True, device=device)
-    with profile(
-        activities=_activities(device),
-        record_shapes=False,
-    ) as prof:
-        for _ in range(iters):
-            out = model(*grad_inputs)
-            _scalar_loss(out).backward()
-            for p in model.parameters():
-                if p.grad is not None:
-                    p.grad = None
-            for x in grad_inputs:
-                if isinstance(x, torch.Tensor) and x.grad is not None:
-                    x.grad = None
-        _sync(device)
+    try:
+        with profile(
+            activities=_activities(device),
+            record_shapes=False,
+        ) as prof:
+            for _ in range(iters):
+                out = model(*grad_inputs)
+                _scalar_loss(out).backward()
+                for p in model.parameters():
+                    if p.grad is not None:
+                        p.grad = None
+                for x in grad_inputs:
+                    if isinstance(x, torch.Tensor) and x.grad is not None:
+                        x.grad = None
+            _sync(device)
+    except RuntimeError as exc:
+        if not _is_profiler_startup_error(exc):
+            raise
+        return fwd_only, {}
     total = _sum_self_cuda_us(prof)
 
     bwd: LatencyCounts = {}
@@ -182,3 +192,9 @@ def _scalar_loss(out) -> torch.Tensor:
             raise TypeError("Model output dict has no tensors for loss")
         return sum(parts)
     raise TypeError(f"Cannot derive scalar loss from output of type {type(out)!r}")
+
+
+def _is_profiler_startup_error(exc: RuntimeError) -> bool:
+    msg = str(exc)
+    needles = ("Kineto Profiler", "PTI_ERROR", "Profiler", "profiler")
+    return any(needle in msg for needle in needles)

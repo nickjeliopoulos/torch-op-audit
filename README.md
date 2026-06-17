@@ -1,9 +1,8 @@
 # torch-op-audit
 
-Per-operator-class FLOP and latency benchmarking for PyTorch neural networks.
+Live operator/module auditing and per-class FLOP/latency reporting for PyTorch neural networks.
 
-Measure what fraction of your model's FLOPs and runtime comes from each type of operation: **tensor contractions** (matmuls, convolutions), **statistical normalizations** (layer norm, batch norm, softmax), and **elementwise** operations. 
-Get a detailed breakdown with GPU-annotated LaTeX tables.
+Attach hooks to arbitrary PyTorch scripts, stream start/stop events into a Python queue, and classify work as **tensor contractions** (matmuls, convolutions), **statistical normalizations** (layer norm, batch norm, softmax), **elementwise** operations, or **other**. You can still generate detailed CSV/LaTeX reports from the preserved benchmark path.
 
 Inspired by Ivanov et al.'s ["Data Movement Is All You Need"](https://arxiv.org/abs/2007.00072).
 
@@ -13,20 +12,28 @@ Inspired by Ivanov et al.'s ["Data Movement Is All You Need"](https://arxiv.org/
 # Install
 pip install -e .
 
-# Benchmark ResNet18
-python -m torch_arch_op_bench.cli --config configs/example.yaml --fwd --bwd
+# Run a config-backed benchmark report
+python -m torch_arch_op_bench.cli --config configs/timm/timm_vit_small.yaml --fwd --bwd
 
-# Or in Python
-from torch_arch_op_bench import benchmark
+# Or audit arbitrary Python directly
+from queue import Queue
 import torch
 from torchvision.models import resnet18
+from torch_arch_op_bench import AuditConfig, aggregate_audit_events, attach_hooks
 
-model = resnet18(weights=None).cuda()
+model = resnet18(weights=None).cuda().eval()
 x = torch.randn(8, 3, 224, 224, device="cuda")
+events = Queue()
 
-report = benchmark(model, [x], fwd=True, bwd=True)
-print(report.fwd_summary)
-report.write("./results")
+cfg = AuditConfig(modules=True, operators=True, record_flops=True)
+with torch.no_grad(), attach_hooks(model, event_queue=events, config=cfg):
+    model(x)
+
+records = []
+while not events.empty():
+    records.append(events.get())
+
+print(aggregate_audit_events(records, kind="operator"))
 ```
 
 ## Output
@@ -47,9 +54,15 @@ Files written:
 - `..._fwd_detailed.csv` / `.tex` (per-op breakdown)
 - `..._bwd_detailed.csv` / `.tex`
 
-## Configuration
+## API Notes
 
-Edit `configs/example.yaml`:
+`attach_hooks()` emits `AuditEvent` dataclasses with `phase="start"` as soon as an operator/module begins and `phase="stop"` when it returns. Stop events include elapsed time and best-effort FLOPs when a formula exists.
+
+Unknown operators can be included as `other` with `AuditConfig(include_unknown_ops=True)`. Unknown modules are skipped by default and can be included as `other` with `AuditConfig(include_unknown_modules=True)`.
+
+## Configuration Reports
+
+Config-backed reports use YAML in this shape:
 
 ```yaml
 model:
@@ -86,27 +99,20 @@ classes:
 
 ```bash
 python -m torch_arch_op_bench.cli \
-  --config configs/example.yaml \
+  --config configs/timm/timm_vit_small.yaml \
   --fwd --bwd \
   --out ./my_results
-
-# Sweep over multiple configs
-python scripts/run_sweep.py --config-dir configs/sweep/ --fwd --bwd
-
-# Run all included TIMM configs in one shot
-python scripts/run_sweep.py --config-dir configs/ --fwd --bwd
 ```
 
 ## Included configs
 
 | Config | Model | Notes |
 |---|---|---|
-| `configs/example.yaml` | ResNet-18 (torchvision) | conv-heavy baseline |
-| `configs/timm_vit_small.yaml` | ViT-Small/16 | attention + LayerNorm heavy |
-| `configs/timm_vit_base.yaml` | ViT-Base/16 | larger attention model |
-| `configs/timm_deit3_small.yaml` | DeiT-III Small/16 | ViT variant with class token |
-| `configs/timm_swin_small.yaml` | Swin-Small | windowed attention + patch merge |
-| `configs/timm_convnext_small.yaml` | ConvNeXt-Small | conv backbone with LayerNorm |
+| `configs/timm/timm_vit_small.yaml` | ViT-Small/16 | attention + LayerNorm heavy |
+| `configs/timm/timm_vit_base.yaml` | ViT-Base/16 | larger attention model |
+| `configs/timm/timm_deit3_small.yaml` | DeiT-III Small/16 | ViT variant with class token |
+| `configs/timm/timm_swin_small.yaml` | Swin-Small | windowed attention + patch merge |
+| `configs/timm/timm_convnext_small.yaml` | ConvNeXt-Small | conv backbone with LayerNorm |
 
 TIMM models require `timm` to be installed:
 

@@ -1,15 +1,16 @@
-"""Operator-class registry.
+"""Operator and module class registries.
 
 Maps ATen operator names to a small set of non-overlapping classes. The
 default taxonomy mirrors Ivanov et al. ("Data Movement Is All You Need"):
-``tensor_contraction``, ``stat_normalization``, ``elementwise``. The
-``elementwise`` class doubles as the catch-all so coverage is always 100%.
+``tensor_contraction``, ``stat_normalization``, ``elementwise``. Unknown
+operators and modules are assigned to the catch-all class ``other`` when the
+caller chooses to include them.
 
-The op membership of each class lives in ``classes/default.json`` at the repo
-top level (not in code) so the taxonomy can be edited and version-controlled on
-its own. Op names are matched on the bare overload-less name (e.g. ``mm`` from
-``aten::mm.default`` or ``aten.mm``); use :func:`classify` to look up a class
-for any string in those forms.
+The op and module membership of each class lives in top-level JSON files under
+``classes/`` so the taxonomy can be edited and version-controlled on its own.
+Op names are matched on the bare overload-less name (e.g. ``mm`` from
+``aten::mm.default`` or ``aten.mm``); module names are matched on class name
+(e.g. ``Linear`` from ``torch.nn.Linear``).
 """
 
 from __future__ import annotations
@@ -19,18 +20,34 @@ from pathlib import Path
 from typing import Iterable, Mapping
 
 
-# Top-level ``classes/default.json`` (sibling of the package directory).
-_DEFAULT_CLASSES_PATH = Path(__file__).resolve().parent.parent / "classes" / "default.json"
+_CLASSES_DIR = Path(__file__).resolve().parent.parent / "classes"
+_LEGACY_CLASSES_PATH = _CLASSES_DIR / "default.json"
+_DEFAULT_OP_CLASSES_PATH = _CLASSES_DIR / "default_ops.json"
+_DEFAULT_MODULE_CLASSES_PATH = _CLASSES_DIR / "default_modules.json"
 
 
 def load_classes_json(path: str | Path) -> dict[str, set[str]]:
-    """Load a ``{class_name: [op, ...]}`` JSON taxonomy into ``{class: set}``."""
+    """Load a ``{class_name: [name, ...]}`` JSON taxonomy into ``{class: set}``."""
     with open(path) as f:
-        raw = json.load(f)
+        text = f.read().strip()
+    if not text:
+        return {}
+    raw = json.loads(text)
     return {cls: set(ops) for cls, ops in raw.items()}
 
 
-DEFAULT_CLASSES: dict[str, set[str]] = load_classes_json(_DEFAULT_CLASSES_PATH)
+def _load_default_op_classes() -> dict[str, set[str]]:
+    table = load_classes_json(_DEFAULT_OP_CLASSES_PATH)
+    if table:
+        return table
+    return load_classes_json(_LEGACY_CLASSES_PATH)
+
+
+DEFAULT_OP_CLASSES: dict[str, set[str]] = _load_default_op_classes()
+DEFAULT_MODULE_CLASSES: dict[str, set[str]] = load_classes_json(_DEFAULT_MODULE_CLASSES_PATH)
+
+# Backwards-compatible alias for the old operator-only registry name.
+DEFAULT_CLASSES: dict[str, set[str]] = DEFAULT_OP_CLASSES
 
 CATCH_ALL_CLASS = "other"
 
@@ -52,6 +69,38 @@ def _normalize_op_name(name: str) -> str:
     return name
 
 
+def _normalize_module_type(name: str) -> str:
+    """Return a bare module class name from a dotted path or class ``repr``."""
+    name = name.strip()
+    if name.startswith("<class '") and name.endswith("'>"):
+        name = name[len("<class '") : -2]
+    return name.rsplit(".", 1)[-1]
+
+
+def _build_name_to_class(
+    defaults: Mapping[str, Iterable[str]],
+    overrides: Mapping[str, Iterable[str]] | None = None,
+    *,
+    normalize,
+) -> dict[str, str]:
+    table: dict[str, set[str]] = {cls: set(names) for cls, names in defaults.items()}
+    if overrides:
+        for cls, names in overrides.items():
+            table[cls] = set(names)
+
+    flat: dict[str, str] = {}
+    for cls, names in table.items():
+        for name in names:
+            normalized = normalize(name)
+            if normalized in flat and flat[normalized] != cls:
+                raise ValueError(
+                    f"Name {name!r} is assigned to both {flat[normalized]!r} and {cls!r}; "
+                    "classes must be non-overlapping"
+                )
+            flat[normalized] = cls
+    return flat
+
+
 def build_op_to_class(
     overrides: Mapping[str, Iterable[str]] | None = None,
 ) -> dict[str, str]:
@@ -61,26 +110,28 @@ def build_op_to_class(
     (per-class replacement, not merge). Raises ``ValueError`` if the
     resulting registry assigns the same op to more than one class.
     """
-    table: dict[str, set[str]] = {cls: set(ops) for cls, ops in DEFAULT_CLASSES.items()}
-    if overrides:
-        for cls, ops in overrides.items():
-            table[cls] = set(ops)
+    return _build_name_to_class(DEFAULT_OP_CLASSES, overrides, normalize=_normalize_op_name)
 
-    flat: dict[str, str] = {}
-    for cls, ops in table.items():
-        for op in ops:
-            if op in flat and flat[op] != cls:
-                raise ValueError(
-                    f"Op {op!r} is assigned to both {flat[op]!r} and {cls!r}; "
-                    "operator classes must be non-overlapping"
-                )
-            flat[op] = cls
-    return flat
+
+def build_module_to_class(
+    overrides: Mapping[str, Iterable[str]] | None = None,
+) -> dict[str, str]:
+    """Flatten the module registry into a ``{module_type: class_name}`` map."""
+    return _build_name_to_class(
+        DEFAULT_MODULE_CLASSES,
+        overrides,
+        normalize=_normalize_module_type,
+    )
 
 
 def classify(op_name: str, op_to_class: Mapping[str, str]) -> str:
     """Return the class name for ``op_name``, falling back to the catch-all."""
     return op_to_class.get(_normalize_op_name(op_name), CATCH_ALL_CLASS)
+
+
+def classify_module(module_type: str, module_to_class: Mapping[str, str]) -> str:
+    """Return the class name for ``module_type``, falling back to the catch-all."""
+    return module_to_class.get(_normalize_module_type(module_type), CATCH_ALL_CLASS)
 
 
 def is_explicitly_registered(op_name: str, op_to_class: Mapping[str, str]) -> bool:
@@ -93,7 +144,15 @@ def is_explicitly_registered(op_name: str, op_to_class: Mapping[str, str]) -> bo
     return _normalize_op_name(op_name) in op_to_class
 
 
-def all_classes(op_to_class: Mapping[str, str]) -> list[str]:
+def is_module_explicitly_registered(
+    module_type: str,
+    module_to_class: Mapping[str, str],
+) -> bool:
+    """True if ``module_type`` has an explicit entry in the module registry."""
+    return _normalize_module_type(module_type) in module_to_class
+
+
+def all_classes(name_to_class: Mapping[str, str]) -> list[str]:
     """All class labels that appear in the registry, with the catch-all included."""
-    seen = {*op_to_class.values(), CATCH_ALL_CLASS}
+    seen = {*name_to_class.values(), CATCH_ALL_CLASS}
     return sorted(seen)
