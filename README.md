@@ -2,7 +2,7 @@
 
 Live operator/module auditing and per-class FLOP/latency reporting for PyTorch neural networks.
 
-Attach hooks to arbitrary PyTorch scripts, stream start/stop events into a Python queue, and classify work as **tensor contractions** (matmuls, convolutions), **statistical normalizations** (layer norm, batch norm, softmax), **elementwise** operations, or **other**. You can still generate detailed CSV/LaTeX reports from the preserved benchmark path.
+Attach hooks to arbitrary PyTorch scripts, stream start/stop events into a Python queue, and classify work as **tensor contractions** (matmuls, convolutions), **statistical normalizations** (layer norm, batch norm, softmax), **elementwise** operations, or **other**. You can also aggregate captured events into report tables directly from Python.
 
 Inspired by Ivanov et al.'s ["Data Movement Is All You Need"](https://arxiv.org/abs/2007.00072).
 
@@ -11,11 +11,9 @@ Inspired by Ivanov et al.'s ["Data Movement Is All You Need"](https://arxiv.org/
 ```bash
 # Install
 pip install -e .
+```
 
-# Run a config-backed benchmark report
-python -m torch_arch_op_bench.cli --config configs/timm/timm_vit_small.yaml --fwd --bwd
-
-# Or audit arbitrary Python directly
+```python
 from queue import Queue
 import torch
 from torchvision.models import resnet18
@@ -39,20 +37,13 @@ print(aggregate_audit_events(records, kind="operator"))
 ## Output
 
 ```
-GPU: NVIDIA A100-SXM4-40GB
-=== forward (NVIDIA A100-SXM4-40GB) ===
+=== operator audit ===
                       count         flops  latency_ms   %_flop  %_runtime
 class
 tensor_contraction    60500  6.264750e+11     1000.25     99.80      60.5
 stat_normalization       64  1.270784e+09       35.15      0.17      25.5
 elementwise           1001  1.968640e+07       10.20      0.03      13.0
 ```
-
-Files written:
-- `NVIDIA_A100-SXM4-40GB__fwd_summary.csv` / `.tex`
-- `NVIDIA_A100-SXM4-40GB__bwd_summary.csv` / `.tex`
-- `..._fwd_detailed.csv` / `.tex` (per-op breakdown)
-- `..._bwd_detailed.csv` / `.tex`
 
 ## API Notes
 
@@ -72,60 +63,6 @@ python tests/test_timm_api.py --device cpu
 # All-in-one compatibility smoke test
 python tests/test_smoke.py --device cpu
 ```
-
-## Configuration Reports
-
-Config-backed reports use YAML in this shape:
-
-```yaml
-model:
-  import: torchvision.models.resnet18
-  kwargs:
-    weights: null
-
-input:
-  shape: [8, 3, 224, 224]
-  dtype: float32
-
-benchmark:
-  fwd: true
-  bwd: true
-  warmup: 10
-  iters: 50
-
-output:
-  dir: ./results
-  latex: true
-  csv: true
-```
-
-Or override the default 3-class operator taxonomy with custom classes:
-
-```yaml
-classes:
-  my_class:
-    - mm
-    - addmm
-```
-
-## CLI
-
-```bash
-python -m torch_arch_op_bench.cli \
-  --config configs/timm/timm_vit_small.yaml \
-  --fwd --bwd \
-  --out ./my_results
-```
-
-## Included configs
-
-| Config | Model | Notes |
-|---|---|---|
-| `configs/timm/timm_vit_small.yaml` | ViT-Small/16 | attention + LayerNorm heavy |
-| `configs/timm/timm_vit_base.yaml` | ViT-Base/16 | larger attention model |
-| `configs/timm/timm_deit3_small.yaml` | DeiT-III Small/16 | ViT variant with class token |
-| `configs/timm/timm_swin_small.yaml` | Swin-Small | windowed attention + patch merge |
-| `configs/timm/timm_convnext_small.yaml` | ConvNeXt-Small | conv backbone with LayerNorm |
 
 TIMM models require `timm` to be installed:
 

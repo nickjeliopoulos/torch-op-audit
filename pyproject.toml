@@ -13,16 +13,12 @@ license = { text = "MIT" }
 dependencies = [
     "torch>=2.10",
     "pandas>=2.0",
-    "omegaconf>=2.3",
     "tabulate>=0.9",
 ]
 
 [project.optional-dependencies]
 timm = ["timm>=0.9"]
 dev = ["timm>=0.9"]
-
-[project.scripts]
-torch-arch-op-bench = "torch_arch_op_bench.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["torch_arch_op_bench*"]
