@@ -38,7 +38,8 @@ def check_timm_model(model_name: str, device: str, *, max_events: int) -> None:
     cfg = AuditConfig(
         modules=True,
         operators=True,
-        record_flops=True,
+        record_flops=False,
+        record_shapes=True,
         module_max_depth=2,
         op_include_names=[
             "addmm",
@@ -107,6 +108,7 @@ def _print_queue_contents(events, *, max_events: int) -> None:
     for idx, event in enumerate(shown):
         duration = "" if event.duration_s is None else f"{event.duration_s * 1_000:.3f}ms"
         flops = "" if event.flops is None else str(event.flops)
+        input_shapes = "" if event.input_shapes is None else event.input_shapes
         name = event.name
         if len(name) > 72:
             name = name[:69] + "..."
@@ -118,6 +120,7 @@ def _print_queue_contents(events, *, max_events: int) -> None:
             f"t={event.t_start:.6f} "
             f"dur={duration:<10} "
             f"flops={flops:<14} "
+            f"shape={input_shapes} "
             f"name={name}"
         )
     if max_events > 0 and len(events) > max_events:
