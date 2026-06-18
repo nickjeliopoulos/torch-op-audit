@@ -1,13 +1,5 @@
 #!/usr/bin/env python
-"""Standalone TIMM checks for the audit API.
-
-Run directly from the repo root:
-
-    python tests/test_timm_api.py --device cpu
-"""
-
 from __future__ import annotations
-
 import argparse
 import os
 import sys
@@ -15,8 +7,8 @@ import traceback
 
 import torch
 
-
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 
 from torch_arch_op_bench import (  # noqa: E402
     AuditConfig,
