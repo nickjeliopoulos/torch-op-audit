@@ -60,6 +60,19 @@ Files written:
 
 Unknown operators can be included as `other` with `AuditConfig(include_unknown_ops=True)`. Unknown modules are skipped by default and can be included as `other` with `AuditConfig(include_unknown_modules=True)`.
 
+## Tests
+
+The standalone API checks can be run directly:
+
+```bash
+python tests/test_api_core.py --device cpu
+python tests/test_report_api.py --device cpu
+python tests/test_timm_api.py --device cpu
+
+# All-in-one compatibility smoke test
+python tests/test_smoke.py --device cpu
+```
+
 ## Configuration Reports
 
 Config-backed reports use YAML in this shape:
