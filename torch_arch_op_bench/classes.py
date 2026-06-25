@@ -1,158 +1,53 @@
-"""Operator-class registry.
+"""Operator and module class registries.
 
 Maps ATen operator names to a small set of non-overlapping classes. The
 default taxonomy mirrors Ivanov et al. ("Data Movement Is All You Need"):
-``tensor_contraction``, ``stat_normalization``, ``elementwise``. The
-``elementwise`` class doubles as the catch-all so coverage is always 100%.
+``tensor_contraction``, ``stat_normalization``, ``elementwise``. Unknown
+operators and modules are assigned to the catch-all class ``other`` when the
+caller chooses to include them.
 
+The op and module membership of each class lives in top-level JSON files under
+``classes/`` so the taxonomy can be edited and version-controlled on its own.
 Op names are matched on the bare overload-less name (e.g. ``mm`` from
-``aten::mm.default`` or ``aten.mm``). Use :func:`classify` to look up a
-class for any string in those forms.
+``aten::mm.default`` or ``aten.mm``); module names are matched on class name
+(e.g. ``Linear`` from ``torch.nn.Linear``).
 """
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Iterable, Mapping
 
 
-DEFAULT_CLASSES: dict[str, set[str]] = {
-    "tensor_contraction": {
-        # --- matrix multiplications ---
-        "mm",
-        "addmm",
-        "bmm",
-        "baddbmm",
-        "matmul",
-        "linear",
-        # --- convolutions (high-level + cuDNN kernel) ---
-        # Note: conv2d and cudnn_convolution are dispatch wrappers / kernels
-        # for the canonical "convolution" op. All three are registered here so
-        # latency is attributed correctly; FLOPs are only counted at the
-        # "convolution" level to avoid double-counting.
-        "convolution",
-        "_convolution",
-        "convolution_backward",
-        "conv2d",                   # Python-level wrapper seen in profiler
-        "cudnn_convolution",        # actual cuDNN kernel seen in profiler
-        "cudnn_convolution_transpose",
-        # --- matrix exponential (sequence of GEMMs via Padé approximant) ---
-        "linalg_matrix_exp",
-        # --- attention ---
-        # SDPA wrapper + the inner-leaf ATen ops it dispatches to (the leaf op is
-        # what actually launches the cutlass / flash kernel; both are tagged here
-        # so attribution is correct regardless of which level torch surfaces).
-        "_scaled_dot_product_efficient_attention",
-        "_scaled_dot_product_flash_attention",
-        "_scaled_dot_product_cudnn_attention",
-        "_scaled_dot_product_efficient_attention_backward",
-        "_scaled_dot_product_flash_attention_backward",
-        "_scaled_dot_product_cudnn_attention_backward",
-        "_efficient_attention_forward",
-        "_efficient_attention_backward",
-        "_flash_attention_forward",
-        "_flash_attention_backward",
-    },
-    "stat_normalization": {
-        # --- layer norm ---
-        "layer_norm",               # Python wrapper (latency only; FLOP counted at native level)
-        "native_layer_norm",
-        "native_layer_norm_backward",
-        # --- batch norm ---
-        # Dispatch chain: batch_norm → _batch_norm_impl_index → cudnn_batch_norm
-        # All registered for latency; FLOPs only counted at terminal ops.
-        "batch_norm",
-        "_batch_norm_impl_index",
-        "cudnn_batch_norm",         # cuDNN terminal kernel
-        "cudnn_batch_norm_backward",
-        "native_batch_norm",
-        "native_batch_norm_backward",
-        "_native_batch_norm_legit",
-        "_native_batch_norm_legit_no_training",
-        "_native_batch_norm_legit_functional",
-        # --- group norm ---
-        "native_group_norm",
-        "native_group_norm_backward",
-        # --- rms norm ---
-        "rms_norm",
-        "_fused_rms_norm",
-        "_fused_rms_norm_backward",
-        # --- softmax / log-softmax ---
-        "softmax",                  # Python wrapper
-        "_softmax",
-        "_softmax_backward_data",
-        "log_softmax",
-        "_log_softmax",
-        "_log_softmax_backward_data",
-        # --- misc statistical reductions ---
-        "var",
-        "var_mean",
-        "std",
-        "mean",
-    },
-    "elementwise": {
-        # arithmetic
-        "add", "add_", "sub", "sub_", "mul", "mul_", "div", "div_",
-        "rsub", "neg", "abs", "pow", "sqrt", "rsqrt", "exp", "log",
-        "log2", "log10", "log1p", "expm1",
-        "reciprocal", "addcmul", "addcdiv",
-        "ceil", "floor", "round", "trunc", "sign",
-        # activations
-        "relu", "relu_", "gelu", "gelu_backward",
-        "silu", "silu_backward", "sigmoid", "sigmoid_backward",
-        "tanh", "tanh_backward", "hardtanh", "hardtanh_backward",
-        "hardswish", "hardswish_backward", "hardsigmoid",
-        "leaky_relu", "leaky_relu_backward", "elu", "elu_backward",
-        "threshold_backward",
-        "softplus", "softplus_backward",
-        # in-place activations seen in profiler (e.g. ReLU → clamp_min_)
-        "clamp_min_", "clamp_max_",
-        # comparisons / select
-        "where", "clamp", "clamp_min", "clamp_max",
-        "eq", "ne", "lt", "le", "gt", "ge",
-        "minimum", "maximum",
-        # dropout
-        "dropout", "native_dropout", "native_dropout_backward",
-        # pooling (sliding-window, no learned weights)
-        "max_pool2d", "max_pool2d_with_indices",
-        "max_pool2d_with_indices_backward",
-        "avg_pool2d", "avg_pool2d_backward",
-        "adaptive_avg_pool2d", "adaptive_avg_pool2d_backward",
-        "adaptive_max_pool2d",
-        # layout / view (zero-FLOP, classified here for time accounting)
-        "view", "_unsafe_view", "reshape", "permute", "transpose",
-        "contiguous", "clone", "expand", "squeeze", "unsqueeze",
-        "cat", "stack", "split", "split_with_sizes", "chunk",
-        "slice", "select", "narrow", "unbind", "flatten",
-        "to", "_to_copy", "copy_", "fill_",
-        "zeros_like", "ones_like", "empty_like", "new_zeros", "new_ones",
-        "empty", "empty_strided",   # allocation (zero FLOP)
-        "detach",
-        # data movement / indexing seen in transformers (Swin roll, position bias)
-        "t",                        # transpose (layout)
-        "as_strided", "as_strided_",
-        "roll",                     # Swin cyclic shift
-        "index", "index_put", "index_put_",
-        "index_select", "gather", "scatter", "scatter_add",
-        # reductions / accumulation often used for residual paths
-        "sum",
-        "max", "min", "amax", "amin", "argmax", "argmin",
-        "cumsum", "cumprod",
-        # tensor creation
-        "arange", "linspace", "logspace", "full", "full_like", "zeros", "ones",
-        "rand", "randn", "rand_like", "randn_like",
-        # sorting / unique (no clean class — generally cheap data movement)
-        "sort", "argsort", "topk",
-        "unique", "unique_consecutive", "unique_dim",
-        # scalar extraction / sync points
-        "_local_scalar_dense",
-        # bitwise / logical
-        "bitwise_and", "bitwise_or", "bitwise_not", "bitwise_xor",
-        "logical_and", "logical_or", "logical_not", "logical_xor",
-        "all", "any",
-        # type / device
-        "type_as",
-    },
-}
+_CLASSES_DIR = Path(__file__).resolve().parent.parent / "classes"
+_LEGACY_CLASSES_PATH = _CLASSES_DIR / "default.json"
+_DEFAULT_OP_CLASSES_PATH = _CLASSES_DIR / "default_ops.json"
+_DEFAULT_MODULE_CLASSES_PATH = _CLASSES_DIR / "default_modules.json"
+
+
+def load_classes_json(path: str | Path) -> dict[str, set[str]]:
+    """Load a ``{class_name: [name, ...]}`` JSON taxonomy into ``{class: set}``."""
+    with open(path) as f:
+        text = f.read().strip()
+    if not text:
+        return {}
+    raw = json.loads(text)
+    return {cls: set(ops) for cls, ops in raw.items()}
+
+
+def _load_default_op_classes() -> dict[str, set[str]]:
+    table = load_classes_json(_DEFAULT_OP_CLASSES_PATH)
+    if table:
+        return table
+    return load_classes_json(_LEGACY_CLASSES_PATH)
+
+
+DEFAULT_OP_CLASSES: dict[str, set[str]] = _load_default_op_classes()
+DEFAULT_MODULE_CLASSES: dict[str, set[str]] = load_classes_json(_DEFAULT_MODULE_CLASSES_PATH)
+
+# Backwards-compatible alias for the old operator-only registry name.
+DEFAULT_CLASSES: dict[str, set[str]] = DEFAULT_OP_CLASSES
 
 CATCH_ALL_CLASS = "other"
 
@@ -174,6 +69,38 @@ def _normalize_op_name(name: str) -> str:
     return name
 
 
+def _normalize_module_type(name: str) -> str:
+    """Return a bare module class name from a dotted path or class ``repr``."""
+    name = name.strip()
+    if name.startswith("<class '") and name.endswith("'>"):
+        name = name[len("<class '") : -2]
+    return name.rsplit(".", 1)[-1]
+
+
+def _build_name_to_class(
+    defaults: Mapping[str, Iterable[str]],
+    overrides: Mapping[str, Iterable[str]] | None = None,
+    *,
+    normalize,
+) -> dict[str, str]:
+    table: dict[str, set[str]] = {cls: set(names) for cls, names in defaults.items()}
+    if overrides:
+        for cls, names in overrides.items():
+            table[cls] = set(names)
+
+    flat: dict[str, str] = {}
+    for cls, names in table.items():
+        for name in names:
+            normalized = normalize(name)
+            if normalized in flat and flat[normalized] != cls:
+                raise ValueError(
+                    f"Name {name!r} is assigned to both {flat[normalized]!r} and {cls!r}; "
+                    "classes must be non-overlapping"
+                )
+            flat[normalized] = cls
+    return flat
+
+
 def build_op_to_class(
     overrides: Mapping[str, Iterable[str]] | None = None,
 ) -> dict[str, str]:
@@ -183,26 +110,28 @@ def build_op_to_class(
     (per-class replacement, not merge). Raises ``ValueError`` if the
     resulting registry assigns the same op to more than one class.
     """
-    table: dict[str, set[str]] = {cls: set(ops) for cls, ops in DEFAULT_CLASSES.items()}
-    if overrides:
-        for cls, ops in overrides.items():
-            table[cls] = set(ops)
+    return _build_name_to_class(DEFAULT_OP_CLASSES, overrides, normalize=_normalize_op_name)
 
-    flat: dict[str, str] = {}
-    for cls, ops in table.items():
-        for op in ops:
-            if op in flat and flat[op] != cls:
-                raise ValueError(
-                    f"Op {op!r} is assigned to both {flat[op]!r} and {cls!r}; "
-                    "operator classes must be non-overlapping"
-                )
-            flat[op] = cls
-    return flat
+
+def build_module_to_class(
+    overrides: Mapping[str, Iterable[str]] | None = None,
+) -> dict[str, str]:
+    """Flatten the module registry into a ``{module_type: class_name}`` map."""
+    return _build_name_to_class(
+        DEFAULT_MODULE_CLASSES,
+        overrides,
+        normalize=_normalize_module_type,
+    )
 
 
 def classify(op_name: str, op_to_class: Mapping[str, str]) -> str:
     """Return the class name for ``op_name``, falling back to the catch-all."""
     return op_to_class.get(_normalize_op_name(op_name), CATCH_ALL_CLASS)
+
+
+def classify_module(module_type: str, module_to_class: Mapping[str, str]) -> str:
+    """Return the class name for ``module_type``, falling back to the catch-all."""
+    return module_to_class.get(_normalize_module_type(module_type), CATCH_ALL_CLASS)
 
 
 def is_explicitly_registered(op_name: str, op_to_class: Mapping[str, str]) -> bool:
@@ -215,7 +144,15 @@ def is_explicitly_registered(op_name: str, op_to_class: Mapping[str, str]) -> bo
     return _normalize_op_name(op_name) in op_to_class
 
 
-def all_classes(op_to_class: Mapping[str, str]) -> list[str]:
+def is_module_explicitly_registered(
+    module_type: str,
+    module_to_class: Mapping[str, str],
+) -> bool:
+    """True if ``module_type`` has an explicit entry in the module registry."""
+    return _normalize_module_type(module_type) in module_to_class
+
+
+def all_classes(name_to_class: Mapping[str, str]) -> list[str]:
     """All class labels that appear in the registry, with the catch-all included."""
-    seen = {*op_to_class.values(), CATCH_ALL_CLASS}
+    seen = {*name_to_class.values(), CATCH_ALL_CLASS}
     return sorted(seen)
